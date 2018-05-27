@@ -1,4 +1,4 @@
-import { Observable, Subject, pipe, OperatorFunction, merge, of } from 'rxjs'
+import { Observable, Subject, pipe, OperatorFunction, merge, of, Subscription } from 'rxjs'
 import {
   map,
   shareReplay,
@@ -52,6 +52,17 @@ function shouldMakeRequest(
   }
 }
 
+function existingResponseExpired(
+  cacheState: CacheState,
+  currentTime: number,
+  ifNotOlderThan: number
+): boolean {
+  return (
+    cacheState.lastResponseTimestamp !== INITIAL_TIME &&
+    cacheState.lastResponseTimestamp + ifNotOlderThan < currentTime
+  )
+}
+
 export default class RxCache<T> {
   private requests$: Subject<void> = new Subject()
   private cacheState$: Observable<CacheState>
@@ -103,6 +114,10 @@ export default class RxCache<T> {
     this.resetCacheRequests$.next()
   }
 
+  subscribeTo<U>(trigger: Observable<U>): Subscription {
+    return trigger.pipe(map(_ => undefined)).subscribe(this.requests$)
+  }
+
   get(ifNotOlderThan: number = 0, returnExpiredCached: boolean = false): Observable<T> {
     return this.cacheState$.pipe(
       take(1),
@@ -110,9 +125,12 @@ export default class RxCache<T> {
       flatMap(({ value: cacheState, timestamp }) => {
         if (shouldMakeRequest(cacheState, timestamp, ifNotOlderThan)) {
           this.requests$.next()
-          if (cacheState.lastResponseTimestamp !== INITIAL_TIME && !returnExpiredCached) {
-            return this.responses$.pipe(skip(1))
-          }
+        }
+        if (
+          existingResponseExpired(cacheState, timestamp, ifNotOlderThan) &&
+          !returnExpiredCached
+        ) {
+          return this.responses$.pipe(skip(1))
         }
         return this.responses$
       })
